@@ -283,6 +283,7 @@ def train(config_path,
     model_logging.open()
     model_logging.log_text(proto_str + "\n", 0, tag="config")
     start_step = net.get_global_step()
+    # start_step = 14000
     total_step = train_cfg.steps
     t = time.time()
     steps_per_eval = train_cfg.steps_per_eval
@@ -304,6 +305,7 @@ def train(config_path,
                 batch_size = example["anchors"].shape[0]
 
                 ret_dict = net_parallel(example_torch)
+                
                 cls_preds = ret_dict["cls_preds"]
                 loss = ret_dict["loss"].mean()
                 cls_loss_reduced = ret_dict["cls_loss_reduced"].mean()
@@ -339,6 +341,8 @@ def train(config_path,
                 else:
                     num_anchors = int(example_torch['anchors_mask'][0].sum())
                 global_step = net.get_global_step()
+                # global_step = 14000
+                # print("global step: %d" % global_step)
 
                 if global_step % display_step == 0:
                     if measure_time:
@@ -389,28 +393,28 @@ def train(config_path,
                                         global_step)
                     model_logging.log_text("Generate output labels...", global_step)
                     t = time.time()
-                    detections = []
-                    prog_bar = ProgressBar()
-                    net.clear_timer()
-                    prog_bar.start((len(eval_dataset) + eval_input_cfg.batch_size - 1)
-                                // eval_input_cfg.batch_size)
-                    for example in iter(eval_dataloader):
-                        example = example_convert_to_torch(example, float_dtype)
-                        detections += net(example)
-                        prog_bar.print_bar()
+                    # detections = []
+                    # prog_bar = ProgressBar()
+                    # net.clear_timer()
+                    # prog_bar.start((len(eval_dataset) + eval_input_cfg.batch_size - 1)
+                    #             // eval_input_cfg.batch_size)
+                    # for example in iter(eval_dataloader):
+                    #     example = example_convert_to_torch(example, float_dtype)
+                    #     detections += net(example)
+                    #     prog_bar.print_bar()
 
-                    sec_per_ex = len(eval_dataset) / (time.time() - t)
-                    model_logging.log_text(
-                        f'generate label finished({sec_per_ex:.2f}/s). start eval:',
-                        global_step)
-                    result_dict = eval_dataset.dataset.evaluation(
-                        detections, str(result_path_step))
-                    for k, v in result_dict["results"].items():
-                        model_logging.log_text("Evaluation {}".format(k), global_step)
-                        model_logging.log_text(v, global_step)
-                    model_logging.log_metrics(result_dict["detail"], global_step)
-                    with open(result_path_step / "result.pkl", 'wb') as f:
-                        pickle.dump(detections, f)
+                    # sec_per_ex = len(eval_dataset) / (time.time() - t)
+                    # model_logging.log_text(
+                    #     f'generate label finished({sec_per_ex:.2f}/s). start eval:',
+                    #     global_step)
+                    # result_dict = eval_dataset.dataset.evaluation(
+                    #     detections, str(result_path_step))
+                    # for k, v in result_dict["results"].items():
+                    #     model_logging.log_text("Evaluation {}".format(k), global_step)
+                    #     model_logging.log_text(v, global_step)
+                    # model_logging.log_metrics(result_dict["detail"], global_step)
+                    # with open(result_path_step / "result.pkl", 'wb') as f:
+                    #     pickle.dump(detections, f)
                     net.train()
                 step += 1
                 if step >= total_step:
@@ -521,7 +525,9 @@ def evaluate(config_path,
             torch.cuda.synchronize()
             prep_example_times.append(time.time() - t1)
         with torch.no_grad():
-            detections += net(example)
+            output = net(example)
+            #print("output:", output)
+            detections = detections + output
         bar.print_bar()
         if measure_time:
             t2 = time.time()
@@ -537,6 +543,10 @@ def evaluate(config_path,
         print(f"avg {name} time = {val * 1000:.3f} ms")
     with open(result_path_step / "result.pkl", 'wb') as f:
         pickle.dump(detections, f)
+    # result_path_step = '/home/muzi2045/Documents/second_TANET.pytorch/second/trained_model/tanet_2020_01_20/eval_results/step_562680'
+    # with open(result_path_step + "/result.pkl", 'rb') as f:
+    #     detections = pickle.load(f)
+
     result_dict = eval_dataset.dataset.evaluation(detections,
                                                   str(result_path_step))
     if result_dict is not None:

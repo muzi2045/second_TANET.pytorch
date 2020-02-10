@@ -2,7 +2,7 @@ import math
 from pathlib import Path
 import numba
 import numpy as np
-from spconv.utils import (
+from spconv.spconv_utils import (
     non_max_suppression_cpu, rotate_non_max_suppression_cpu)
 from second.core import box_np_ops
 from second.core.non_max_suppression.nms_gpu import rotate_iou_gpu

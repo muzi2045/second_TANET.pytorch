@@ -56,11 +56,13 @@ class NuScenesDataset(Dataset):
                  info_path,
                  class_names=None,
                  prep_func=None,
+                 test_mode=False,
                  num_point_features=None):
         self._root_path = Path(root_path)
         with open(info_path, 'rb') as f:
             data = pickle.load(f)
         self._nusc_infos = data["infos"]
+        # self.load_infos(self._root_path)
         self._nusc_infos = list(
             sorted(self._nusc_infos, key=lambda e: e["timestamp"]))
         self._metadata = data["metadata"]
@@ -74,17 +76,64 @@ class NuScenesDataset(Dataset):
         self.version = self._metadata["version"]
         self.eval_version = "cvpr_2019"
         self._with_velocity = False
+        self.test_mode = test_mode
 
     def __len__(self):
         return len(self._nusc_infos)
+
+    # def load_infos(self, info_path):
+
+    #     with open(info_path, "rb") as f:
+    #         _nusc_infos_all = pickle.load(f)
+
+    #     if not self.test_mode:  # if training
+    #         self.frac = int(len(_nusc_infos_all) * 0.25)
+
+    #         _cls_infos = {name: [] for name in self._class_names}
+    #         for info in _nusc_infos_all:
+    #             for name in set(info["gt_names"]):
+    #                 if name in self._class_names:
+    #                     _cls_infos[name].append(info)
+
+    #         duplicated_samples = sum([len(v) for _, v in _cls_infos.items()])
+    #         _cls_dist = {k: len(v) / duplicated_samples for k, v in _cls_infos.items()}
+
+    #         self._nusc_infos = []
+
+    #         frac = 1.0 / len(self._class_names)
+    #         ratios = [frac / v for v in _cls_dist.values()]
+
+    #         for cls_infos, ratio in zip(list(_cls_infos.values()), ratios):
+    #             self._nusc_infos += np.random.choice(
+    #                 cls_infos, int(len(cls_infos) * ratio)
+    #             ).tolist()
+
+    #         _cls_infos = {name: [] for name in self._class_names}
+    #         for info in self._nusc_infos:
+    #             for name in set(info["gt_names"]):
+    #                 if name in self._class_names:
+    #                     _cls_infos[name].append(info)
+
+    #         _cls_dist = {
+    #             k: len(v) / len(self._nusc_infos) for k, v in _cls_infos.items()
+    #         }
+    #     else:
+    #         if isinstance(_nusc_infos_all, dict):
+    #             self._nusc_infos = []
+    #             for v in _nusc_infos_all.values():
+    #                 self._nusc_infos.extend(v)
+    #         else:
+    #             self._nusc_infos = _nusc_infos_all
 
     @property
     def ground_truth_annotations(self):
         if "gt_boxes" not in self._nusc_infos[0]:
             return None
-        from nuscenes.eval.detection.config import eval_detection_configs
-        cls_range_map = eval_detection_configs[self.
-                                               eval_version]["class_range"]
+        # from nuscenes.eval.detection.config import eval_detection_configs
+        from nuscenes.eval.detection.config import config_factory
+        # cls_range_map = eval_detection_configs[self.
+                                            #    eval_version]["class_range"]
+        cls_range_map = config_factory(self.eval_version).class_range
         gt_annos = []
         for info in self._nusc_infos:
             gt_names = info["gt_names"]
@@ -360,7 +409,7 @@ class NuScenesDataset(Dataset):
             json.dump(nusc_submissions, f)
         eval_main_file = Path(__file__).resolve().parent / "nusc_eval.py"
         # why add \"{}\"? to support path with spaces.
-        cmd = f"python {str(eval_main_file)} --root_path=\"{str(self._root_path)}\""
+        cmd = f"python3 {str(eval_main_file)} --root_path=\"{str(self._root_path)}\""
         cmd += f" --version={self.version} --eval_version={self.eval_version}"
         cmd += f" --res_path=\"{str(res_path)}\" --eval_set={eval_set_map[self.version]}"
         cmd += f" --output_dir=\"{output_dir}\""
@@ -552,9 +601,11 @@ def _lidar_nusc_box_to_global(info, boxes, classes, eval_version="cvpr_2019"):
         # Move box to ego vehicle coord system
         box.rotate(pyquaternion.Quaternion(info['lidar2ego_rotation']))
         box.translate(np.array(info['lidar2ego_translation']))
-        from nuscenes.eval.detection.config import eval_detection_configs
+        from nuscenes.eval.detection.config import config_factory
+        # from nuscenes.eval.detection.config import eval_detection_configs
         # filter det in ego.
-        cls_range_map = eval_detection_configs[eval_version]["class_range"]
+        # cls_range_map = eval_detection_configs[eval_version]["class_range"]
+        cls_range_map = config_factory(eval_version).class_range
         radius = np.linalg.norm(box.center[:2], 2)
         det_range = cls_range_map[classes[box.label]]
         if radius > det_range:
@@ -784,8 +835,10 @@ def get_box_mean(info_path, class_name="vehicle.car",
                  eval_version="cvpr_2019"):
     with open(info_path, 'rb') as f:
         nusc_infos = pickle.load(f)["infos"]
-    from nuscenes.eval.detection.config import eval_detection_configs
-    cls_range_map = eval_detection_configs[eval_version]["class_range"]
+    # from nuscenes.eval.detection.config import eval_detection_configs
+    from nuscenes.eval.detection.config import config_factory
+    # cls_range_map = eval_detection_configs[eval_version]["class_range"]
+    cls_range_map = config_factory(eval_version).class_range
 
     gt_boxes_list = []
     gt_vels_list = []
@@ -867,8 +920,10 @@ def render_nusc_result(nusc, results, sample_token):
 def cluster_trailer_box(info_path, class_name="bus"):
     with open(info_path, 'rb') as f:
         nusc_infos = pickle.load(f)["infos"]
-    from nuscenes.eval.detection.config import eval_detection_configs
-    cls_range_map = eval_detection_configs["cvpr_2019"]["class_range"]
+    # from nuscenes.eval.detection.config import eval_detection_configs
+    from nuscenes.eval.detection.config import config_factory
+    # cls_range_map = eval_detection_configs["cvpr_2019"]["class_range"]
+    cls_range_map = config_factory("cvpr_2019").class_range
     gt_boxes_list = []
     for info in nusc_infos:
         gt_boxes = info["gt_boxes"]

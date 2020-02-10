@@ -12,7 +12,7 @@ from second.pytorch.core import box_torch_ops
 from second.pytorch.core.losses import (WeightedSigmoidClassificationLoss,
                                         WeightedSmoothL1LocalizationLoss,
                                         WeightedSoftmaxClassificationLoss)
-from second.pytorch.models import middle, pointpillars, rpn, voxel_encoder
+from second.pytorch.models import middle, pointpillars, rpn, voxel_encoder, pointpillars_tanet, psa
 from torchplus import metrics
 from second.pytorch.utils import torch_timer
 
@@ -153,6 +153,7 @@ class VoxelNet(nn.Module):
             num_input_features=middle_num_input_features,
             num_filters_down1=middle_num_filters_d1,
             num_filters_down2=middle_num_filters_d2)
+        self.rpn_class_name = rpn_class_name
         self.rpn = rpn.get_rpn_class(rpn_class_name)(
             use_norm=True,
             num_class=num_class,
@@ -295,20 +296,94 @@ class VoxelNet(nn.Module):
                 dir_logits, dir_targets, weights=weights)
             dir_loss = dir_loss.sum() / batch_size_dev
             loss += dir_loss * self._direction_loss_weight
+
+        if self.rpn_class_name == 'PSA':
+            refine_box_preds = preds_dict["Refine_box_preds"]
+            refine_cls_preds = preds_dict["Refine_cls_preds"]
+
+            positives = labels > 0
+            reg_weights_ori = positives.type(torch.float32)
+
+            refine_loc_loss, refine_cls_loss = create_refine_loss(
+                            self._loc_loss_ftor,
+                            self._cls_loss_ftor,
+                            example,
+                            coarse_box_preds=box_preds,
+                            coarse_cls_preds=cls_preds,
+                            refine_box_preds=refine_box_preds,
+                            refine_cls_preds=refine_cls_preds,
+                            cls_targets=cls_targets,
+                            cls_weights=cls_weights,
+                            reg_targets=reg_targets,
+                            reg_weights=reg_weights,
+                            num_class=self._num_class,
+                            encode_background_as_zeros=True,
+                            encode_rad_error_by_sin=True,
+                            box_code_size=7,
+                            reg_weights_ori = reg_weights_ori)
+            refine_loc_loss = 2 * refine_loc_loss
+            refine_cls_loss = 2 * refine_cls_loss
+
+            refine_loc_loss_reduced = refine_loc_loss.sum() / batch_size_dev
+            refine_loc_loss_reduced *= self._loc_loss_weight  # self._loc_loss_weight = 2.0
+            refine_cls_pos_loss, refine_cls_neg_loss = _get_pos_neg_loss(refine_cls_loss, labels)
+            refine_cls_pos_loss /= self._pos_cls_weight
+            refine_cls_neg_loss /= self._neg_cls_weight
+            refine_cls_loss_reduced = refine_cls_loss.sum() / batch_size_dev
+            refine_cls_loss_reduced *= self._cls_loss_weight
+
+            refine_loss = refine_loc_loss_reduced + refine_cls_loss_reduced
+            
+            if self._use_direction_classifier:
+                refine_dir_logits = preds_dict["Refine_dir_preds"].view(batch_size_dev, -1, 2)
+                ### compute refine dir loss
+                refine_dir_loss = self._dir_loss_ftor(refine_dir_logits, dir_targets, weights=weights)
+                refine_dir_loss = refine_dir_loss.sum() / batch_size_dev
+
+                ### self._direction_loss_weight = 0.2
+                total_dir_loss = dir_loss + refine_dir_loss * self._direction_loss_weight
+
+                ### compute total loss
+                refine_loss += total_dir_loss
+            total_loss = loss + refine_loss
+
+            res = {
+                "loss": total_loss,
+                "coarse_loss": loss,
+                "refine_loss": refine_loss,
+                "cls_loss": cls_loss,
+                "loc_loss": loc_loss,
+                "cls_pos_loss": cls_pos_loss,
+                "cls_neg_loss": cls_neg_loss,
+
+                "refine_cls_loss_reduced": refine_cls_loss_reduced,
+                "refine_loc_loss_reduced": refine_loc_loss_reduced,
+
+                "cls_preds": refine_cls_preds,
+                "dir_loss_reduced": total_dir_loss,
+
+                "cls_loss_reduced": cls_loss_reduced,
+                "loc_loss_reduced": loc_loss_reduced,
+                "cared": cared,
+            }
+        else:
+            res = {
+                "loss": loss,
+                "cls_loss": cls_loss,
+                "loc_loss": loc_loss,
+                "cls_pos_loss": cls_pos_loss,
+                "cls_neg_loss": cls_neg_loss,
+                "cls_preds": cls_preds,
+                "dir_loss_reduced": dir_loss,
+                "cls_loss_reduced": cls_loss_reduced,
+                "loc_loss_reduced": loc_loss_reduced,
+                "cared": cared,
+            }
+
         self.end_timer("loss forward")
-        res = {
-            "loss": loss,
-            "cls_loss": cls_loss,
-            "loc_loss": loc_loss,
-            "cls_pos_loss": cls_pos_loss,
-            "cls_neg_loss": cls_neg_loss,
-            "cls_preds": cls_preds,
-            "cls_loss_reduced": cls_loss_reduced,
-            "loc_loss_reduced": loc_loss_reduced,
-            "cared": cared,
-        }
-        if self._use_direction_classifier:
-            res["dir_loss_reduced"] = dir_loss
+        
+        # if self._use_direction_classifier:
+        #     res["dir_loss_reduced"] = dir_loss
         return res
 
     def network_forward(self, voxels, num_points, coors, batch_size):
@@ -323,17 +398,24 @@ class VoxelNet(nn.Module):
             }
         """
         self.start_timer("voxel_feature_extractor")
+        # t = time.time()
         voxel_features = self.voxel_feature_extractor(voxels, num_points,
                                                       coors)
         self.end_timer("voxel_feature_extractor")
+        # print("      feature extractor cost time:", time.time() - t)
 
         self.start_timer("middle forward")
+        # t = time.time()
         spatial_features = self.middle_feature_extractor(
             voxel_features, coors, batch_size)
         self.end_timer("middle forward")
+        # print("      middle forward cost time:", time.time() - t)
+
         self.start_timer("rpn forward")
+        # t = time.time()
         preds_dict = self.rpn(spatial_features)
         self.end_timer("rpn forward")
+        # print("      rpn forward cost time:", time.time() - t)
         return preds_dict
 
     def forward(self, example):
@@ -342,25 +424,30 @@ class VoxelNet(nn.Module):
         voxels = example["voxels"]
         num_points = example["num_points"]
         coors = example["coordinates"]
-        if len(num_points.shape) == 2:  # multi-gpu
-            num_voxel_per_batch = example["num_voxels"].cpu().numpy().reshape(
-                -1)
-            voxel_list = []
-            num_points_list = []
-            coors_list = []
-            for i, num_voxel in enumerate(num_voxel_per_batch):
-                voxel_list.append(voxels[i, :num_voxel])
-                num_points_list.append(num_points[i, :num_voxel])
-                coors_list.append(coors[i, :num_voxel])
-            voxels = torch.cat(voxel_list, dim=0)
-            num_points = torch.cat(num_points_list, dim=0)
-            coors = torch.cat(coors_list, dim=0)
+        # if len(num_points.shape) == 2:  # multi-gpu
+        #     num_voxel_per_batch = example["num_voxels"].cpu().numpy().reshape(
+        #         -1)
+        #     voxel_list = []
+        #     num_points_list = []
+        #     coors_list = []
+        #     for i, num_voxel in enumerate(num_voxel_per_batch):
+        #         voxel_list.append(voxels[i, :num_voxel])
+        #         num_points_list.append(num_points[i, :num_voxel])
+        #         coors_list.append(coors[i, :num_voxel])
+        #     voxels = torch.cat(voxel_list, dim=0)
+        #     num_points = torch.cat(num_points_list, dim=0)
+        #     coors = torch.cat(coors_list, dim=0)
         batch_anchors = example["anchors"]
+        
         batch_size_dev = batch_anchors.shape[0]
         # features: [num_voxels, max_num_points_per_voxel, 7]
         # num_points: [num_voxels]
         # coors: [num_voxels, 4]
+        torch.cuda.synchronize()
+        # t = time.time()
         preds_dict = self.network_forward(voxels, num_points, coors, batch_size_dev)
+        torch.cuda.synchronize()
+        # print("    network forward time:", time.time() - t)
         # need to check size.
         box_preds = preds_dict["box_preds"].view(batch_size_dev, -1, self._box_coder.code_size)
         err_msg = f"num_anchors={batch_anchors.shape[1]}, but num_output={box_preds.shape[1]}. please check size"
@@ -369,12 +456,17 @@ class VoxelNet(nn.Module):
             return self.loss(example, preds_dict)
         else:
             self.start_timer("predict")
+            # t = time.time()
             with torch.no_grad():
+
+                # if self.rpn_class_name == "PSA":
                 res = self.predict(example, preds_dict)
+
             self.end_timer("predict")
+            # print("    predict time cost:", time.time() - t)
             return res
 
-    def predict(self, example, preds_dict):
+    def predict(self, example, preds_dict, use_refine=False):
         """start with v1.6.0, this function don't contain any kitti-specific code.
         Returns:
             predict: list of pred_dict.
@@ -404,6 +496,7 @@ class VoxelNet(nn.Module):
         batch_cls_preds = preds_dict["cls_preds"]
         batch_box_preds = batch_box_preds.view(batch_size, -1,
                                                self._box_coder.code_size)
+
         num_class_with_bg = self._num_class
         if not self._encode_background_as_zeros:
             num_class_with_bg = self._num_class + 1
@@ -412,12 +505,34 @@ class VoxelNet(nn.Module):
                                                num_class_with_bg)
         batch_box_preds = self._box_coder.decode_torch(batch_box_preds,
                                                        batch_anchors)
-        if self._use_direction_classifier:
-            batch_dir_preds = preds_dict["dir_cls_preds"]
-            batch_dir_preds = batch_dir_preds.view(batch_size, -1,
+
+        if self.rpn_class_name == "PSA":
+            batch_refine_box_preds = preds_dict["Refine_box_preds"]
+            batch_refine_cls_preds = preds_dict["Refine_cls_preds"]
+
+            batch_refine_box_preds = batch_refine_box_preds.view(batch_size, -1,
+                                                           self._box_coder.code_size)
+            de_refine_boxes = self._box_coder.decode_torch(batch_refine_box_preds, batch_box_preds)
+            batch_box_preds = de_refine_boxes
+            batch_cls_preds = batch_refine_cls_preds
+            batch_cls_preds = batch_cls_preds.view(batch_size, -1, num_class_with_bg)
+            
+            if self._use_direction_classifier:
+                batch_dir_preds = preds_dict["Refine_dir_preds"]
+                batch_dir_preds = batch_dir_preds.view(batch_size, -1,
                                                    self._num_direction_bins)
+            else:
+                batch_dir_preds = [None] * batch_size
         else:
-            batch_dir_preds = [None] * batch_size
+            batch_box_preds = batch_box_preds
+            batch_cls_preds = batch_cls_preds
+        
+            if self._use_direction_classifier:
+                batch_dir_preds = preds_dict["dir_cls_preds"]
+                batch_dir_preds = batch_dir_preds.view(batch_size, -1,
+                                                   self._num_direction_bins)
+            else:
+                batch_dir_preds = [None] * batch_size
 
         predictions_dicts = []
         post_center_range = None
@@ -713,6 +828,14 @@ def add_sin_difference(boxes1, boxes2, boxes1_rot, boxes2_rot, factor=1.0):
                        dim=-1)
     return boxes1, boxes2
 
+def add_sin_difference_sim(boxes1, boxes2):
+    rad_pred_encoding = torch.sin(boxes1[..., -1:]) * torch.cos(
+        boxes2[..., -1:])
+    rad_tg_encoding = torch.cos(boxes1[..., -1:]) * torch.sin(boxes2[..., -1:])
+    boxes1 = torch.cat([boxes1[..., :-1], rad_pred_encoding], dim=-1)
+    boxes2 = torch.cat([boxes2[..., :-1], rad_tg_encoding], dim=-1)
+    return boxes1, boxes2
+
 
 def create_loss(loc_loss_ftor,
                 cls_loss_ftor,
@@ -752,6 +875,73 @@ def create_loss(loc_loss_ftor,
         cls_preds, one_hot_targets, weights=cls_weights)  # [N, M]
     return loc_losses, cls_losses
 
+def create_refine_loss(
+                loc_loss_ftor,
+                cls_loss_ftor,
+                example,
+                coarse_box_preds,
+                coarse_cls_preds,
+                refine_box_preds,
+                refine_cls_preds,
+                cls_targets,  # [B,H*W,1]
+                cls_weights,  # [B,H*W]
+                reg_targets,  # [B,H*W, 7]
+                reg_weights,  # [B,H*W]
+                num_class,
+                encode_background_as_zeros=True,
+                encode_rad_error_by_sin=True,
+                box_code_size=7,
+                reg_weights_ori = None):
+
+
+
+    batch_size = example['anchors'].shape[0]
+    anchors = example["anchors"].view(batch_size, -1, box_code_size)
+    coarse_box_preds = coarse_box_preds.view(batch_size,-1,box_code_size)
+    refine_box_preds = refine_box_preds.view(batch_size, -1, box_code_size)
+
+    ## Decode  coarse boxes and Prior Anchors
+    de_coarse_boxes = box_torch_ops.second_box_decode(coarse_box_preds,anchors)
+
+
+    ### Decode  GT and Prior Anchors
+    de_gt_boxes  = box_torch_ops.second_box_decode(reg_targets, anchors)
+    #### Encode
+    new_gt = box_torch_ops.second_box_encode(de_gt_boxes,de_coarse_boxes)
+
+    if encode_background_as_zeros:
+        coarse_conf = coarse_cls_preds.view(batch_size, -1, num_class)
+        refine_conf = refine_cls_preds.view(batch_size,-1,num_class)
+
+    else:
+        coarse_conf = coarse_cls_preds.view(batch_size, -1, num_class+1)
+        refine_conf = refine_cls_preds.view(batch_size,-1,num_class+1)
+
+    cls_targets = cls_targets.squeeze(-1)
+    one_hot_targets = torchplus.nn.one_hot(
+        cls_targets, depth=num_class + 1, dtype=refine_box_preds.dtype)
+    if encode_background_as_zeros:     # True
+        one_hot_targets = one_hot_targets[..., 1:]
+    if encode_rad_error_by_sin:
+        # sin(a - b) = sinacosb-cosasinb
+        box_preds, reg_targets = add_sin_difference_sim(refine_box_preds, new_gt)
+    refine_loc_losses = loc_loss_ftor(
+        box_preds, reg_targets, weights=reg_weights)  # [N, M]    # [2,70400,7]
+
+
+    refine_cls_losses = cls_loss_ftor(
+        refine_conf, one_hot_targets, weights=cls_weights)  # [N, M]
+
+    ##############################
+    # ## if cfg.USE_IOU_LOSS:
+    # coarse_iou_loss = compute_iou_loss(de_coarse_boxes, de_gt_boxes, coarse_conf, thre = 0.7, weights=reg_weights_ori)
+    # de_refine_boxes =  box_torch_ops.second_box_decode(refine_box_preds, de_coarse_boxes)
+    # refine_iou_loss = compute_iou_loss(de_refine_boxes, de_gt_boxes, refine_conf, thre = 0.7, weights=reg_weights_ori)
+    # #############################
+    ## if cfg.USE_CORNER_LOSS:
+    # corner_loss_sum = corners_loss(de_refine_boxes, de_gt_boxes, weights=reg_weights)
+
+    return refine_loc_losses, refine_cls_losses #,coarse_iou_loss, refine_iou_loss #, 0.5*corner_loss_sum
 
 def prepare_loss_weights(labels,
                          pos_cls_weight=1.0,

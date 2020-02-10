@@ -6,6 +6,8 @@ import fire
 
 import second.data.kitti_dataset as kitti_ds
 import second.data.nuscenes_dataset as nu_ds
+import second.data.lyft_dataset as lyft_ds
+import second.data.udi_dataset as udi_ds
 from second.data.all_dataset import create_groundtruth_database
 
 def kitti_data_prep(root_path):
@@ -18,6 +20,16 @@ def nuscenes_data_prep(root_path, version, dataset_name, max_sweeps=10):
     name = "infos_train.pkl"
     if version == "v1.0-test":
         name = "infos_test.pkl"
+    create_groundtruth_database(dataset_name, root_path, Path(root_path) / name)
+
+def lyft_data_prep(root_path, json_path, dataset_name, max_sweeps=10):
+    lyft_ds.create_lyft_infos(root_path, json_path, max_sweeps=max_sweeps)
+    name = "infos_train.pkl"
+    create_groundtruth_database(dataset_name, root_path, Path(root_path) / name)
+
+def udi_data_prep(root_path, dataset_name):
+    udi_ds.create_udi_infos(root_path)
+    name = "infos_udi_train.pkl"
     create_groundtruth_database(dataset_name, root_path, Path(root_path) / name)
 
 if __name__ == '__main__':

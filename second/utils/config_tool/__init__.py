@@ -20,7 +20,8 @@ def change_detection_range(model_config, new_range):
     old_pc_range[:2] = new_range[:2]
     old_pc_range[3:5] = new_range[2:]
     model_config.voxel_generator.point_cloud_range[:] = old_pc_range
-    for anchor_generator in model_config.target_assigner.anchor_generators:
+    # model_config.target_assigner.a
+    for anchor_generator in model_config.target_assigner.class_settings:
         a_type = anchor_generator.WhichOneof('anchor_generator')
         if a_type == "anchor_generator_range":
             a_cfg = anchor_generator.anchor_generator_range

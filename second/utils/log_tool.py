@@ -63,10 +63,10 @@ class SimpleModelLog:
         summary_dir.mkdir(parents=True, exist_ok=True)
 
         log_mjson_file_path = model_dir / f'log.json.lst'
-        if log_mjson_file_path.exists():
-            with open(log_mjson_file_path, 'r') as f:
-                for line in f.readlines():
-                    self.metrics.append(json.loads(line))
+        # if log_mjson_file_path.exists():
+        #     with open(log_mjson_file_path, 'r') as f:
+        #         for line in f.readlines():
+        #             self.metrics.append(json.loads(line))
         log_file_path = model_dir / f'log.txt'
         self.log_mjson_file = open(log_mjson_file_path, 'a')
         self.log_file = open(log_file_path, 'a')

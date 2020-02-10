@@ -4,7 +4,7 @@ import time
 from collections import defaultdict
 from functools import partial
 
-import cv2
+# import cv2
 import numpy as np
 from skimage import io as imgio
 

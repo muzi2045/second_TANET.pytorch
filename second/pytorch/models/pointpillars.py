@@ -36,6 +36,12 @@ class PFNLayer(nn.Module):
         if not self.last_vfe:
             out_channels = out_channels // 2
         self.units = out_channels
+        # self.in_channels = in_channels
+        # self.linear = nn.Linear(self.in_channels, self.units, bias = False)
+        # self.norm = nn.BatchNorm2d(self.units, eps=1e-3, momentum=0.01)
+
+        # self.conv1 = nn.Conv2d(in_channels=self.in_channels, out_channels=self.units, kernel_size=1, stride=1)
+        # self.conv3 = nn.Conv2d(64, 64, kernel_size=(1, 60), stride=(1, 1), dilation=(1,1))
 
         if use_norm:
             BatchNorm1d = change_default_args(
@@ -44,18 +50,25 @@ class PFNLayer(nn.Module):
         else:
             BatchNorm1d = Empty
             Linear = change_default_args(bias=True)(nn.Linear)
+        
+        self.conv1 = nn.Conv1d(in_channels, self.units, 3, padding=1)
 
         self.linear = Linear(in_channels, self.units)
         self.norm = BatchNorm1d(self.units)
 
     def forward(self, inputs):
+        # x = self.linear(inputs)
+        # x = self.norm(x.permute(0, 2, 1).contiguous()).permute(0, 2, 1).contiguous()
 
-        x = self.linear(inputs)
-        x = self.norm(x.permute(0, 2, 1).contiguous()).permute(0, 2,
-                                                               1).contiguous()
+        x = self.conv1(inputs)
+        
+        x = self.norm(x)
+        
         x = F.relu(x)
 
-        x_max = torch.max(x, dim=1, keepdim=True)[0]
+        x_max = torch.max(x, dim=2, keepdim=True)[0]
+
+        # print("x_max size:", x_max.size())
 
         if self.last_vfe:
             return x_max
@@ -230,10 +243,15 @@ class PillarFeatureNet(nn.Module):
         mask = torch.unsqueeze(mask, -1).type_as(features)
         features *= mask
 
+        features = features.permute(0, 2, 1).contiguous()
+
+        # features = features.view(1, 9, features.size(0), features.size(1))
+
         # Forward pass through PFNLayers
         for pfn in self.pfn_layers:
             features = pfn(features)
 
+        # print("features size:", features.size())
         return features.squeeze()
 
 @register_vfe
@@ -317,6 +335,8 @@ class PillarFeatureNetRadius(nn.Module):
         mask = get_paddings_indicator(num_voxels, voxel_count, axis=0)
         mask = torch.unsqueeze(mask, -1).type_as(features)
         features *= mask
+
+        features = features.permute(0, 2, 1).contiguous()
 
         # Forward pass through PFNLayers
         for pfn in self.pfn_layers:
@@ -410,9 +430,11 @@ class PillarFeatureNetRadiusHeight(nn.Module):
         mask = torch.unsqueeze(mask, -1).type_as(features)
         features *= mask
 
+
         # Forward pass through PFNLayers
         for pfn in self.pfn_layers:
             features = pfn(features)
+
 
         return features.squeeze()
 
@@ -443,6 +465,8 @@ class PointPillarsScatter(nn.Module):
 
     def forward(self, voxel_features, coords, batch_size):
 
+        # print("pillars scatter:", self.output_shape)
+
         # batch_canvas will be the final output.
         batch_canvas = []
         for batch_itt in range(batch_size):
@@ -458,6 +482,8 @@ class PointPillarsScatter(nn.Module):
             this_coords = coords[batch_mask, :]
             indices = this_coords[:, 2] * self.nx + this_coords[:, 3]
             indices = indices.type(torch.long)
+            # voxels = voxel_features[:, batch_mask]
+
             voxels = voxel_features[batch_mask, :]
             voxels = voxels.t()
 

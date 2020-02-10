@@ -4,8 +4,15 @@ from pathlib import Path
 import numba
 import numpy as np
 from numba import cuda
-
-from spconv.utils import non_max_suppression
+from spconv import spconv_utils
+try:
+    from spconv.utils import non_max_suppression
+except ImportError:
+    pass
+# try:
+#     from spconv.spconv_utils import non_max_suppression
+# except ImportError:
+#     pass
 
 def nms_gpu_cc(dets, nms_overlap_thresh, device_id=0):
     boxes_num = dets.shape[0]

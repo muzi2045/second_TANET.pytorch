@@ -10,7 +10,8 @@ import numpy as np
 from second.core import box_np_ops
 from second.core.geometry import (is_line_segment_intersection_jit,
                                   points_in_convex_polygon_3d_jit,
-                                  points_in_convex_polygon_jit)
+                                  points_in_convex_polygon_jit,
+                                  points_in_convex_polygon)
 import copy
 
 

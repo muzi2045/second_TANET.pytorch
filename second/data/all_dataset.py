@@ -1,6 +1,7 @@
 import pickle
 from pathlib import Path
 
+import fire
 import numpy as np
 
 from second.core import box_np_ops
@@ -33,17 +34,21 @@ def create_groundtruth_database(dataset_class_name,
         database_save_path = Path(database_save_path)
     if db_info_save_path is None:
         db_info_save_path = root_path / "kitti_dbinfos_train.pkl"
+    print("GT save path:", str(db_info_save_path))
     database_save_path.mkdir(parents=True, exist_ok=True)
     all_db_infos = {}
 
     group_counter = 0
+    print("dataset length:", len(dataset))
     for j in prog_bar(list(range(len(dataset)))):
         image_idx = j
         sensor_data = dataset.get_sensor_data(j)
-        if "image_idx" in sensor_data["metadata"]:
-            image_idx = sensor_data["metadata"]["image_idx"]
+        # if "image_idx" in sensor_data["metadata"]:
+        #     image_idx = sensor_data["metadata"]["image_idx"]
         points = sensor_data["lidar"]["points"]
+        # print("sensor_data points:", points.shape)
         annos = sensor_data["lidar"]["annotations"]
+        # print("sensor_data annos:", annos)
         gt_boxes = annos["boxes"]
         names = annos["names"]
         group_dict = {}
@@ -57,6 +62,7 @@ def create_groundtruth_database(dataset_class_name,
             difficulty = annos["difficulty"]
 
         num_obj = gt_boxes.shape[0]
+        # print("num_obj:", num_obj)
         point_indices = box_np_ops.points_in_rbbox(points, gt_boxes)
         for i in range(num_obj):
             filename = f"{image_idx}_{names[i]}_{i}.bin"
@@ -82,6 +88,7 @@ def create_groundtruth_database(dataset_class_name,
                     # "group_id": -1,
                     # "bbox": bboxes[i],
                 }
+                # print("db_info:", db_info["path"])
                 local_group_id = group_ids[i]
                 # if local_group_id >= 0:
                 if local_group_id not in group_dict:
@@ -187,3 +194,7 @@ def create_groundtruth_database_parallel(dataset_class_name,
 
     with open(db_info_save_path, 'wb') as f:
         pickle.dump(all_db_infos, f)
+
+
+if __name__ == "__main__":
+    fire.Fire()
