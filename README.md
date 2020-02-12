@@ -1,9 +1,35 @@
-# SECOND for KITTI/NuScenes object detection (1.6.0 Alpha)
-SECOND detector.
+# SECOND for KITTI/NuScenes object detection 
+ADD TANET attention module for pointpillars 
 
-"Alpha" means there may be many bugs, config format may change, spconv API may change.
+(ref paper: TANet: Robust 3D Object Detection from Point Clouds with Triple Attention
+ 
+ ref repo: https://github.com/happinesslz/TANet)
 
-ONLY support python 3.6+, pytorch 1.0.0+. Tested in Ubuntu 16.04/18.04/Windows 10.
+ADD Multiclass-balanced module
+
+(ref repo: https://github.com/poodarchu/Det3D)
+
+ADD Lyft dataset info generate module(may exist some bugs in it)
+
+there still exist some little fix in the pointpillars feature extractor for more convenience to depoly with TensorRT.
+
+Have tried to deploy pointpillars with ncnn(https://github.com/Tencent/ncnn)
+
+The inference framework memory cost is very low and not using CUDA(it use vulkan)
+
+Have convert pytorch model --> onnx --> ncnn model
+
+Unfortunately, have no extra time to continue this work. 
+
+My tested environment:
+
+Python3.6.8
+
+pytorch1.0 / pytorch1.3.0 / pytorch1.3.1
+
+CUDA 10.0 / CUDA 10.1
+
+Ubuntu16.04
 
 If you want to train nuscenes dataset, see [this](NUSCENES-GUIDE.md).
 
@@ -282,14 +308,6 @@ Firstly the load button must be clicked and load successfully.
 
 ![GuidePic](https://raw.githubusercontent.com/traveller59/second.pytorch/master/images/viewerweb.png)
 
-
-
-## Try Kitti Viewer (Deprecated)
-
-You should use kitti viewer based on pyqt and pyqtgraph to check data before training.
-
-run ```python ./kittiviewer/viewer.py```, check following picture to use kitti viewer:
-![GuidePic](https://raw.githubusercontent.com/traveller59/second.pytorch/master/images/simpleguide.png)
 
 ## Concepts
 
