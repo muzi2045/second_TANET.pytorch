@@ -448,22 +448,13 @@ class NuScenesDataset(Dataset):
         }
 
     def evaluation(self, detections, output_dir):
-        """kitti evaluation is very slow, remove it.
-        """
-        # res_kitti = self.evaluation_kitti(detections, output_dir)
         res_nusc = self.evaluation_nusc(detections, output_dir)
         res = {
             "results": {
                 "nusc": res_nusc["results"]["nusc"],
-                # "kitti.official": res_kitti["results"]["official"],
-                # "kitti.coco": res_kitti["results"]["coco"],
             },
             "detail": {
                 "eval.nusc": res_nusc["detail"]["nusc"],
-                # "eval.kitti": {
-                #     "official": res_kitti["detail"]["official"],
-                #     "coco": res_kitti["detail"]["coco"],
-                # },
             },
         }
         return res

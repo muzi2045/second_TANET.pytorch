@@ -55,6 +55,7 @@ class UDIDataset(Dataset):
                  prep_func=None,
                  num_point_features=None):
         self._root_path = Path(root_path)
+        self._info_path = Path(info_path)
         with open(info_path, 'rb') as f:
             data = pickle.load(f)
         self._udi_infos = data["infos"]
@@ -67,15 +68,11 @@ class UDIDataset(Dataset):
     
     def __len__(self):
         return len(self._udi_infos)
-
-    @property
-    def ground_truth_annotations(self):
-        pass
     
     def __getitem__(self, idx):
         input_dict = self.get_sensor_data(idx)
         example = self._prep_func(input_dict=input_dict)
-        # example["metadata"] = input_dict["metadata"]
+        example["metadata"] = input_dict["metadata"]
         if "anchors_mask" in example:
             example["anchors_mask"] = example["anchors_mask"].astype(np.uint8)
         return example
@@ -85,14 +82,15 @@ class UDIDataset(Dataset):
         if isinstance(query, dict):
             assert "lidar" in query
             idx = query["lidar"]["idx"]
-            # read_test_image = "cam" in query
-
         info = self._udi_infos[idx]
         res = {
             "lidar": {
                 "type": "lidar",
                 "points": None,
-            }
+            },
+            "metadata": {
+                "token": info["token"]
+            },
         }
         lidar_path = Path(info['lidar_path'])
 
@@ -109,17 +107,95 @@ class UDIDataset(Dataset):
             }
         return res
 
-    def evaluation_kitti(self, detections, output_dir):
-        pass
-
-    def evaluation_nusc(self, detections, output_dir):
-        pass
-
-    def evaluation_lyft(self, detections, output_dir):
-        pass
-
     def evaluation_udi(self, detections, output_dir):
-        pass
+        version = self.version
+        eval_set_map = {
+            # "v1.0-mini": "mini_train",
+            "v1.0-trainval": "val",
+        }
+        # gt_annos = self.ground_truth_annotations
+        # if gt_annos is None:
+            # return None
+        udi_annos = {}
+        mapped_class_names = self._class_names
+        token2info = {}
+        for info in self._udi_infos:
+            token2info[info["token"]] = info
+        for det in detections:
+            annos = []
+            boxes = _second_det_to_udi_box(det)
+            for i, box in enumerate(boxes):
+                name = mapped_class_names[box.label]
+                velocity = box.velocity[:2].tolist()
+                box.velocity = np.array([*velocity, 0.0])
+            for i, box in enumerate(boxes):
+                name = mapped_class_names[box.label]
+                velocity = box.velocity[:2].tolist()
+                nusc_anno = {
+                    "sample_token": det["metadata"]["token"],
+                    "translation": box.center.tolist(),
+                    "size": box.wlh.tolist(),
+                    "rotation": box.orientation.elements.tolist(),
+                    "velocity": velocity,
+                    "detection_name": name,
+                    "detection_score": box.score,
+                    "attribute_name": "",
+                }
+                annos.append(nusc_anno)
+            udi_annos[det["metadata"]["token"]] = annos
+        nusc_submissions = {
+            "meta": {
+                "use_camera": False,
+                "use_lidar": False,
+                "use_radar": False,
+                "use_map": False,
+                "use_external": False,
+            },
+            "results": udi_annos,
+        }
+        res_path = Path(output_dir) / "results_udi.json"
+        with open(res_path, "w") as f:
+            json.dump(nusc_submissions, f)
+        eval_main_file = Path(__file__).resolve().parent / "udi_eval.py"
+        # why add \"{}\"? to support path with spaces.
+        cmd = f"python3 {str(eval_main_file)} --root_path=\"{str(self._root_path)}\""
+        cmd += f" --info_path=\"{str(self._info_path)}\""
+        cmd += f" --version={self.version}"
+        cmd += f" --res_path=\"{str(res_path)}\" --eval_set={eval_set_map[self.version]}"
+        cmd += f" --output_dir=\"{output_dir}\""
+        # use subprocess can release all nusc memory after evaluation
+        subprocess.check_output(cmd, shell=True)
+        with open(Path(output_dir) / "metrics_summary.json", "r") as f:
+            metrics = json.load(f)
+        detail = {}
+        res_path.unlink()  # delete results_nusc.json since it's very large
+        result = f"Nusc {version} Evaluation\n"
+        for name in mapped_class_names:
+            detail[name] = {}
+            for k, v in metrics["label_aps"][name].items():
+                detail[name][f"dist@{k}"] = v
+            tp_errs = []
+            tp_names = []
+            for k, v in metrics["label_tp_errors"][name].items():
+                detail[name][k] = v
+                tp_errs.append(f"{v:.4f}")
+                tp_names.append(k)
+            threshs = ', '.join(list(metrics["label_aps"][name].keys()))
+            scores = list(metrics["label_aps"][name].values())
+            scores = ', '.join([f"{s * 100:.2f}" for s in scores])
+            result += f"{name} Nusc dist AP@{threshs} and TP errors\n"
+            result += scores
+            result += "\n"
+            result += ', '.join(tp_names) + ": " + ', '.join(tp_errs)
+            result += "\n"
+        return {
+            "results": {
+                "nusc": result
+            },
+            "detail": {
+                "nusc": detail
+            },
+        }
 
 
     def evaluation(self, detections, output_dir):
@@ -134,28 +210,28 @@ class UDIDataset(Dataset):
         }
         return res
 
-# def _second_det_to_nusc_box(detection):
-#     from lyft_dataset_sdk.utils.data_classes import Box
-#     import pyquaternion
-#     box3d = detection["box3d_lidar"].detach().cpu().numpy()
-#     scores = detection["scores"].detach().cpu().numpy()
-#     labels = detection["label_preds"].detach().cpu().numpy()
-#     box3d[:, 6] = -box3d[:, 6] - np.pi/2
-#     box_list = []
-#     for i in range(box3d.shape[0]):
-#         quat = pyquaternion.Quaternion(axis=[0, 0, 1], radians=box3d[i,6])
-#         velocity = (np.nan, np.nan, np.nan)
-#         if box3d.shape[1] == 9:
-#             velocity = (*box3d[i, 7:9], 0.0)
-#         box = Box(
-#             box3d[i, :3],
-#             box3d[i, 3:6],
-#             quat,
-#             label=labels[i],
-#             score=scores[i],
-#             velocity=velocity)
-#         box_list.append(box)
-#     return box_list
+def _second_det_to_udi_box(detection):
+    from udi_eval import Box
+    import pyquaternion
+    box3d = detection["box3d_lidar"].detach().cpu().numpy()
+    scores = detection["scores"].detach().cpu().numpy()
+    labels = detection["label_preds"].detach().cpu().numpy()
+    box3d[:, 6] = -box3d[:, 6] - np.pi/2
+    box_list = []
+    for i in range(box3d.shape[0]):
+        quat = pyquaternion.Quaternion(axis=[0, 0, 1], radians=box3d[i,6])
+        velocity = (np.nan, np.nan, np.nan)
+        # if box3d.shape[1] == 9:
+        #     velocity = (*box3d[i, 7:9], 0.0)
+        box = Box(
+            box3d[i, :3],
+            box3d[i, 3:6],
+            quat,
+            label=labels[i],
+            score=scores[i],
+            velocity=velocity)
+        box_list.append(box)
+    return box_list
 
 # def _lidar_nusc_box_to_global(info, boxes, classes, eval_version="ICLR 2019"):
 #     import pyquaternion
@@ -223,6 +299,7 @@ def _fill_train_infos(root_path):
             "lidar_path": lidar_path,
             "cam_front_path": cam_path,
             "filename": filename,
+            "token": int(index),
         }
         gt_locs_list = []
         gt_dims_list = []
@@ -242,15 +319,12 @@ def _fill_train_infos(root_path):
         rots = np.array([b["yaw"] for b in boxes]).reshape(-1, 1)
         names = [b["class"] for b in boxes]
 
-        # locs = np.array([b.center for b in boxes]).reshape(-1, 3)
-        # dims = np.array([b.wlh for b in boxes]).reshape(-1, 3)
-        
         for i in range(len(names)):
             if names[i] in UDIDataset.NameMapping:
                 names[i] = UDIDataset.NameMapping[names[i]]
         names = np.array(names)
         # we need to convert rot to SECOND format.
-        # change the rot format will break all checkpoint, so...
+        # change the rot format will break all checkpoint.
         gt_boxes = np.concatenate([locs, dims, -rots - np.pi / 2], axis=1)
 
         info["gt_boxes"] = gt_boxes
