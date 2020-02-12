@@ -1,22 +1,34 @@
 # SECOND for KITTI/NuScenes object detection 
 ADD TANET attention module for pointpillars 
+
 (ref paper: TANet: Robust 3D Object Detection from Point Clouds with Triple Attention
+ 
  ref repo: https://github.com/happinesslz/TANet)
+
 ADD Multiclass-balanced module
+
 (ref repo: https://github.com/poodarchu/Det3D)
+
 ADD Lyft dataset info generate module(may exist some bugs in it)
 
 there still exist some little fix in the pointpillars feature extractor for more convenience to depoly with TensorRT.
 
 Have tried to deploy pointpillars with ncnn(https://github.com/Tencent/ncnn)
+
 The inference framework memory cost is very low and not using CUDA(it use vulkan)
+
 Have convert pytorch model --> onnx --> ncnn model
+
 Unfortunately, have no extra time to continue this work. 
 
 My tested environment:
+
 Python3.6.8
+
 pytorch1.0 / pytorch1.3.0 / pytorch1.3.1
+
 CUDA 10.0 / CUDA 10.1
+
 Ubuntu16.04
 
 If you want to train nuscenes dataset, see [this](NUSCENES-GUIDE.md).
